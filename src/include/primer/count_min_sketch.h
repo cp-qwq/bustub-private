@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -28,6 +29,7 @@ class CountMinSketch {
    * @param width Number of buckets
    * @param depth Number of hash functions
    */
+  // 本质就是做了 depth 次 hash
   explicit CountMinSketch(uint32_t width, uint32_t depth);
 
   CountMinSketch() = delete;                                            // Default constructor deleted
@@ -82,8 +84,12 @@ class CountMinSketch {
   /** Dimensions of the count-min sketch matrix */
   uint32_t width_;  // Number of buckets for each hash function
   uint32_t depth_;  // Number of independent hash functions
+
+  // sketch matrix
+  std::vector<std::vector<uint32_t>> matrix_;
   /** Pre-computed hash functions for each row */
   std::vector<std::function<size_t(const KeyType &)>> hash_functions_;
+  std::mutex mtx_;
 
   /** @fall2025 PLEASE DO NOT MODIFY THE FOLLOWING */
   constexpr static size_t SEED_BASE = 15445;
@@ -95,10 +101,10 @@ class CountMinSketch {
    * @return A function that maps items to column indices
    */
   inline auto HashFunction(size_t seed) -> std::function<size_t(const KeyType &)> {
-    return [seed, this](const KeyType &item) -> size_t {
+    return [seed, w = width_](const KeyType &item) -> size_t {
       auto h1 = std::hash<KeyType>{}(item);
       auto h2 = bustub::HashUtil::CombineHashes(seed, SEED_BASE);
-      return bustub::HashUtil::CombineHashes(h1, h2) % width_;
+      return bustub::HashUtil::CombineHashes(h1, h2) % w;
     };
   }
 
