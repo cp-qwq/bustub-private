@@ -85,8 +85,6 @@ class CountMinSketch {
   uint32_t width_;  // Number of buckets for each hash function
   uint32_t depth_;  // Number of independent hash functions
 
-  // sketch matrix
-  std::vector<std::vector<uint32_t>> matrix_;
   /** Pre-computed hash functions for each row */
   std::vector<std::function<size_t(const KeyType &)>> hash_functions_;
   std::mutex mtx_;
@@ -101,14 +99,15 @@ class CountMinSketch {
    * @return A function that maps items to column indices
    */
   inline auto HashFunction(size_t seed) -> std::function<size_t(const KeyType &)> {
-    return [seed, w = width_](const KeyType &item) -> size_t {
+    return [seed, this](const KeyType &item) -> size_t {
       auto h1 = std::hash<KeyType>{}(item);
       auto h2 = bustub::HashUtil::CombineHashes(seed, SEED_BASE);
-      return bustub::HashUtil::CombineHashes(h1, h2) % w;
+      return bustub::HashUtil::CombineHashes(h1, h2) % width_;
     };
   }
-
   /** @todo (student) can add their data structures that support count-min sketch operations */
+  // sketch matrix
+  std::vector<std::vector<uint32_t>> matrix_;
 };
 
 }  // namespace bustub

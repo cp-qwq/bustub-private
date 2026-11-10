@@ -12,7 +12,9 @@
 
 #include "primer/count_min_sketch.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <queue>
 #include <stdexcept>
@@ -48,20 +50,33 @@ template <typename KeyType>
 CountMinSketch<KeyType>::CountMinSketch(CountMinSketch &&other) noexcept : width_(other.width_), depth_(other.depth_) {
   /** @TODO(student) Implement this function! */
   matrix_ = std::move(other.matrix_);
-  hash_functions_ = std::move(other.hash_functions_);
+  hash_functions_.clear();
+  hash_functions_.reserve(depth_);
+  for (size_t i = 0; i < depth_; i++) {
+    hash_functions_.push_back(this->HashFunction(i));
+  }
   other.matrix_.clear();
   other.hash_functions_.clear();
+  other.depth_ = other.width_ = 0;
 }
 
 template <typename KeyType>
 auto CountMinSketch<KeyType>::operator=(CountMinSketch &&other) noexcept -> CountMinSketch & {
   /** @TODO(student) Implement this function! */
+  if (this == &other) {
+    return *this;
+  }
   width_ = other.width_;
   depth_ = other.depth_;
   matrix_ = std::move(other.matrix_);
-  hash_functions_ = std::move(other.hash_functions_);
+  hash_functions_.clear();
+  hash_functions_.reserve(depth_);
+  for (size_t i = 0; i < depth_; i++) {
+    hash_functions_.push_back(this->HashFunction(i));
+  }
   other.matrix_.clear();
   other.hash_functions_.clear();
+  other.depth_ = other.width_ = 0;
   return *this;
 }
 
@@ -69,10 +84,9 @@ template <typename KeyType>
 void CountMinSketch<KeyType>::Insert(const KeyType &item) {
   /** @TODO(student) Implement this function! */
   for (size_t i = 0; i < depth_; i++) {
-    auto hash_func = hash_functions_[i];
-    auto hash = hash_func(item);
+    auto hash = hash_functions_[i](item);
     std::lock_guard<std::mutex> lock(mtx_);
-    matrix_[i][hash % width_]++;
+    matrix_[i][hash]++;
   }
 }
 
@@ -91,22 +105,19 @@ void CountMinSketch<KeyType>::Merge(const CountMinSketch<KeyType> &other) {
 
 template <typename KeyType>
 auto CountMinSketch<KeyType>::Count(const KeyType &item) const -> uint32_t {
-  uint32_t res = 2e9;
+  uint32_t res = std::numeric_limits<uint32_t>::max();
   for (size_t i = 0; i < depth_; i++) {
-    auto hash_func = hash_functions_[i];
-    auto hash = hash_func(item);
-    res = std::min(res, matrix_[i][hash % width_]);
+    auto hash = hash_functions_[i](item);
+    res = std::min(res, matrix_[i][hash]);
   }
-  return (res == 2e9 ? 0 : res);
+  return (res == std::numeric_limits<uint32_t>::max() ? 0 : res);
 }
 
 template <typename KeyType>
 void CountMinSketch<KeyType>::Clear() {
   /** @TODO(student) Implement this function! */
   for (size_t i = 0; i < depth_; i++) {
-    for (size_t j = 0; j < width_; j++) {
-      matrix_[i][j] = 0;
-    }
+    std::fill(matrix_[i].begin(), matrix_[i].end(), 0);
   }
 }
 

@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <list>
 #include <memory>
 #include <mutex>  // NOLINT
@@ -26,6 +27,7 @@ namespace bustub {
 
 enum class AccessType { Unknown = 0, Lookup, Scan, Index };
 
+// 淘汰策略类型
 enum class ArcStatus { MRU, MFU, MRU_GHOST, MFU_GHOST };
 
 // TODO(student): You can modify or remove this struct as you like.
@@ -34,8 +36,9 @@ struct FrameStatus {
   frame_id_t frame_id_;
   bool evictable_;
   ArcStatus arc_status_;
-  FrameStatus(page_id_t pid, frame_id_t fid, bool ev, ArcStatus st)
-      : page_id_(pid), frame_id_(fid), evictable_(ev), arc_status_(st) {}
+  std::list<int32_t>::iterator pos_;
+  FrameStatus(page_id_t pid, frame_id_t fid, bool ev, ArcStatus st, std::list<int32_t>::iterator pos)
+      : page_id_(pid), frame_id_(fid), evictable_(ev), arc_status_(st), pos_(pos) {}
 };
 
 /**
@@ -62,10 +65,10 @@ class ArcReplacer {
 
  private:
   // TODO(student): implement me! You can replace or remove these member variables as you like.
-  std::list<frame_id_t> mru_;
-  std::list<frame_id_t> mfu_;
-  std::list<page_id_t> mru_ghost_;
-  std::list<page_id_t> mfu_ghost_;
+  std::list<frame_id_t> mru_;       // 最近最常使用列表
+  std::list<frame_id_t> mfu_;       // 最近访问次数最多的列表
+  std::list<page_id_t> mru_ghost_;  // 最近从 mru_ 淘汰的页面
+  std::list<page_id_t> mfu_ghost_;  // 最近从 mfu_ 淘汰的页面
 
   /* record entries in mru_ and mfu_
    * this uses frame_id_t to guarantee no duplicate records for the same
@@ -79,9 +82,9 @@ class ArcReplacer {
   /* alive, evictable entries count */
   [[maybe_unused]] size_t curr_size_{0};
   /* p as in original paper */
-  [[maybe_unused]] size_t mru_target_size_{0};
+  [[maybe_unused]] size_t mru_target_size_{0};  // ARC 希望给 mru_ 分配多少缓存容量（和实际大小是不同的）
   /* c as in original paper */
-  [[maybe_unused]] size_t replacer_size_;
+  [[maybe_unused]] size_t replacer_size_;  // 缓存的最大容量
   std::mutex latch_;
 
   // TODO(student): You can add member variables / functions as you like.

@@ -12,7 +12,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "buffer/arc_replacer.h"
+#include <algorithm>
+#include <cfloat>
+#include <cstddef>
+#include <iterator>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <stdexcept>
 #include "common/config.h"
 
 namespace bustub {
@@ -44,7 +51,103 @@ ArcReplacer::ArcReplacer(size_t num_frames) : replacer_size_(num_frames) {}
  *
  * @return frame id of the evicted frame, or std::nullopt if cannot evict
  */
-auto ArcReplacer::Evict() -> std::optional<frame_id_t> { return std::nullopt; }
+auto ArcReplacer::Evict() -> std::optional<frame_id_t> {
+  std::lock_guard<std::mutex> lk(latch_);
+  if (mru_.size() >= mru_target_size_) {
+    // 优先淘汰 mru
+    auto it = mru_.rbegin();
+    while (it != mru_.rend()) {
+      frame_id_t frame = *it;
+      auto frame_status_iter = alive_map_.find(frame);
+      if (frame_status_iter != alive_map_.end()) {
+        auto frame_status = frame_status_iter->second;
+        if (frame_status->evictable_) {
+          // alive 这边清空
+          mru_.erase(--it.base());
+          alive_map_.erase(frame_status_iter);
+          // 加入到ghost
+          mru_ghost_.push_front(frame_status->page_id_);
+          frame_status->evictable_ = false;
+          frame_status->arc_status_ = ArcStatus::MRU_GHOST;
+          frame_status->pos_ = mru_ghost_.begin();
+          ghost_map_[frame_status->page_id_] = frame_status;
+          curr_size_--;
+          return frame_status->frame_id_;
+        }
+      }
+      it = std::next(it);
+    }
+    it = mfu_.rbegin();
+    while (it != mfu_.rend()) {
+      frame_id_t frame = *it;
+      auto frame_status_iter = alive_map_.find(frame);
+      if (frame_status_iter != alive_map_.end()) {
+        auto frame_status = frame_status_iter->second;
+        if (frame_status->evictable_) {
+          // alive 这边清空
+          mfu_.erase(--it.base());
+          alive_map_.erase(frame_status_iter);
+          // 加入到ghost
+          mfu_ghost_.push_front(frame_status->page_id_);
+          frame_status->arc_status_ = ArcStatus::MFU_GHOST;
+          frame_status->evictable_ = false;
+          frame_status->pos_ = mfu_ghost_.begin();
+          ghost_map_[frame_status->page_id_] = frame_status;
+          curr_size_--;
+          return frame_status->frame_id_;
+        }
+      }
+      it = std::next(it);
+    }
+  } else {
+    // 优先淘汰 mfu_
+    auto it = mfu_.rbegin();
+    while (it != mfu_.rend()) {
+      frame_id_t frame = *it;
+      auto frame_status_iter = alive_map_.find(frame);
+      if (frame_status_iter != alive_map_.end()) {
+        auto frame_status = frame_status_iter->second;
+        if (frame_status->evictable_) {
+          // alive 这边清空
+          mfu_.erase(--it.base());
+          alive_map_.erase(frame_status_iter);
+          // 加入到ghost
+          mfu_ghost_.push_front(frame_status->page_id_);
+          frame_status->arc_status_ = ArcStatus::MFU_GHOST;
+          frame_status->evictable_ = false;
+          frame_status->pos_ = mfu_ghost_.begin();
+          ghost_map_[frame_status->page_id_] = frame_status;
+          curr_size_--;
+          return frame_status->frame_id_;
+        }
+      }
+      it = std::next(it);
+    }
+    it = mru_.rbegin();
+    while (it != mru_.rend()) {
+      frame_id_t frame = *it;
+      auto frame_status_iter = alive_map_.find(frame);
+      if (frame_status_iter != alive_map_.end()) {
+        auto frame_status = frame_status_iter->second;
+        if (frame_status->evictable_) {
+          // alive 这边清空
+          mru_.erase(--it.base());
+          alive_map_.erase(frame_status_iter);
+          // 加入到ghost
+          mru_ghost_.push_front(frame_status->page_id_);
+          frame_status->arc_status_ = ArcStatus::MRU_GHOST;
+          frame_status->evictable_ = false;
+          frame_status->pos_ = mru_ghost_.begin();
+          ghost_map_[frame_status->page_id_] = frame_status;
+          curr_size_--;
+          return frame_status->frame_id_;
+        }
+      }
+      it = std::next(it);
+    }
+  }
+  return std::nullopt;
+}
 
 /**
  * TODO(P1): Add implementation
@@ -75,7 +178,118 @@ auto ArcReplacer::Evict() -> std::optional<frame_id_t> { return std::nullopt; }
  * @param access_type type of access that was received. This parameter is only needed for
  * leaderboard tests.
  */
-void ArcReplacer::RecordAccess(frame_id_t frame_id, page_id_t page_id, [[maybe_unused]] AccessType access_type) {}
+void ArcReplacer::RecordAccess(frame_id_t frame_id, page_id_t page_id, [[maybe_unused]] AccessType access_type) {
+  std::lock_guard<std::mutex> lk(latch_);
+  auto it = alive_map_.find(frame_id);
+  if (it != alive_map_.end()) {
+    auto frame_status = it->second;
+
+    if (frame_status->arc_status_ == ArcStatus::MRU) {
+      // mru -> mfu
+      frame_status->arc_status_ = ArcStatus::MFU;
+      auto pos = frame_status->pos_;
+      if (pos != mru_.end()) {
+        mru_.erase(pos);
+      }
+      mfu_.push_front(frame_status->frame_id_);
+      frame_status->pos_ = mfu_.begin();
+    } else {
+      auto pos = frame_status->pos_;
+      if (pos != mfu_.end()) {
+        mfu_.erase(pos);
+      }
+      mfu_.push_front(frame_status->frame_id_);
+      frame_status->pos_ = mfu_.begin();
+    }
+    return;
+  }
+
+  it = ghost_map_.find(page_id);
+  if (it != ghost_map_.end()) {
+    auto frame_status = it->second;
+    // 命中 ghost
+    if (frame_status->arc_status_ == ArcStatus::MRU_GHOST) {
+      // 自适应调整 mru_ghost
+      if (mru_ghost_.size() >= mfu_ghost_.size()) {
+        mru_target_size_++;
+      } else {
+        mru_target_size_ += mfu_ghost_.size() / mru_ghost_.size();
+      }
+      mru_target_size_ = std::min(mru_target_size_, replacer_size_);
+
+      // 先从 ghost 这边的list和map 删掉
+      auto pos = frame_status->pos_;
+      if (pos != mru_ghost_.end()) {
+        mru_ghost_.erase(pos);
+      }
+      ghost_map_.extract(it);
+
+      // 更新一下状态放到 alive这边去
+      frame_status->arc_status_ = ArcStatus::MFU;
+      frame_status->frame_id_ = frame_id;
+      alive_map_[frame_id] = frame_status;
+      mfu_.push_front(frame_id);
+      frame_status->pos_ = mfu_.begin();
+    } else {
+      // 自适应调整 mfu_ghost
+      if (mfu_ghost_.size() >= mru_ghost_.size()) {
+        if (mru_target_size_ == 0) {
+          mru_target_size_ = 0;
+        } else {
+          mru_target_size_--;
+        }
+      } else {
+        if (mru_target_size_ < mru_ghost_.size() / mfu_ghost_.size()) {
+          mru_target_size_ = 0;
+        } else {
+          mru_target_size_ -= mru_ghost_.size() / mfu_ghost_.size();
+        }
+      }
+      mru_target_size_ = std::max(static_cast<size_t>(0), mru_target_size_);
+      // 先从 ghost 这边的list和map 删掉
+      auto pos = frame_status->pos_;
+      if (pos != mfu_ghost_.end()) {
+        mfu_ghost_.erase(pos);
+      }
+      ghost_map_.extract(it);
+
+      // 更新一下状态放到 alive这边去
+      frame_status->arc_status_ = ArcStatus::MFU;
+      frame_status->frame_id_ = frame_id;
+      alive_map_[frame_id] = frame_status;
+      mfu_.push_front(frame_id);
+      frame_status->pos_ = mfu_.begin();
+    }
+    return;
+  }
+
+  if (mru_.size() + mru_ghost_.size() == replacer_size_) {
+    // 删除 MRU 影子列表中的最后一个元素，然后将该页面添加到 MRU 的前端
+    if (!mru_ghost_.empty()) {
+      auto lst = std::prev(mru_ghost_.end());
+      if (ghost_map_.count(*lst) >= 1) {
+        ghost_map_.erase(*lst);
+      }
+      mru_ghost_.erase(lst);
+    }
+  } else if (mru_.size() + mru_ghost_.size() < replacer_size_) {
+    if (mru_.size() + mfu_.size() + mru_ghost_.size() + mfu_ghost_.size() == 2 * replacer_size_) {
+      // 删除 MFU 影子列表中的最后一个元素，然后将该页面添加到 MRU 的前端
+      if (!mfu_ghost_.empty()) {
+        auto lst = std::prev(mfu_ghost_.end());
+        if (ghost_map_.count(*lst) >= 1) {
+          ghost_map_.erase(*lst);
+        }
+        mfu_ghost_.erase(lst);
+      }
+    }
+  } 
+
+  mru_.push_front(frame_id);
+  std::shared_ptr<FrameStatus> frame_status =
+      std::make_shared<FrameStatus>(page_id, frame_id, false, ArcStatus::MRU, mru_.begin());
+  alive_map_[frame_id] = frame_status;
+}
 
 /**
  * TODO(P1): Add implementation
@@ -94,7 +308,26 @@ void ArcReplacer::RecordAccess(frame_id_t frame_id, page_id_t page_id, [[maybe_u
  * @param frame_id id of frame whose 'evictable' status will be modified
  * @param set_evictable whether the given frame is evictable or not
  */
-void ArcReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {}
+void ArcReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
+  std::lock_guard<std::mutex> lk(latch_);
+  auto it = alive_map_.find(frame_id);
+  if (it != alive_map_.end()) {
+    auto frame_status = it->second;
+    if (frame_status->evictable_) {
+      if (!set_evictable) {
+        curr_size_--;
+        frame_status->evictable_ = false;
+      }
+    } else {
+      if (set_evictable) {
+        curr_size_++;
+        frame_status->evictable_ = true;
+      }
+    }
+  } else {
+    throw std::invalid_argument("invalid frame id");
+  }
+}
 
 /**
  * TODO(P1): Add implementation
@@ -112,7 +345,24 @@ void ArcReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {}
  *
  * @param frame_id id of frame to be removed
  */
-void ArcReplacer::Remove(frame_id_t frame_id) {}
+void ArcReplacer::Remove(frame_id_t frame_id) {
+  std::lock_guard<std::mutex> lk(latch_);
+  auto it = alive_map_.find(frame_id);
+  if (it != alive_map_.end()) {
+    auto frame_status = it->second;
+    if (frame_status->evictable_) {
+      if (frame_status->arc_status_ == ArcStatus::MRU) {
+        mru_.erase(frame_status->pos_);
+      } else {
+        mfu_.erase(frame_status->pos_);
+      }
+      alive_map_.erase(it);
+      curr_size_--;
+    } else {
+      throw std::invalid_argument("invalid frame id");
+    }
+  }
+}
 
 /**
  * TODO(P1): Add implementation
@@ -121,6 +371,9 @@ void ArcReplacer::Remove(frame_id_t frame_id) {}
  *
  * @return size_t
  */
-auto ArcReplacer::Size() -> size_t { return 0; }
+auto ArcReplacer::Size() -> size_t {
+  std::lock_guard<std::mutex> lk(latch_);
+  return curr_size_;
+}
 
 }  // namespace bustub

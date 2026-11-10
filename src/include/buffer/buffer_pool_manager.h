@@ -71,7 +71,7 @@ class FrameHeader {
 
   /** @brief The frame ID / index of the frame this header represents. */
   const frame_id_t frame_id_;
-
+  // page_id_t page_id_;
   /** @brief The readers / writer latch for this frame. */
   std::shared_mutex rwlatch_;
 
@@ -171,5 +171,6 @@ class BufferPoolManager {
    * stored inside of it. Additionally, you may also want to implement a helper function that returns either a shared
    * pointer to a `FrameHeader` that already has a page's data stored inside of it, or an index to said `FrameHeader`.
    */
+  auto WriteFrameToDisk(page_id_t page_id, frame_id_t frame) -> bool;
 };
 }  // namespace bustub
